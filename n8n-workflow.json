@@ -1,0 +1,227 @@
+{
+  "name": "Network Audit → Ping & SSH → Google Sheets",
+  "nodes": [
+    {
+      "id": "ScheduleTrigger",
+      "name": "Schedule (Daily)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        -320,
+        -40
+      ],
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyDay",
+              "hour": 0,
+              "minute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ManualTrigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -320,
+        120
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "SetHosts",
+      "name": "Set Hosts",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        -100,
+        40
+      ],
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "array": [
+            {
+              "name": "hosts",
+              "value": "['127.0.0.1','192.168.1.1','8.8.8.8']"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "SplitHosts",
+      "name": "Split Hosts to Items",
+      "type": "n8n-nodes-base.itemLists",
+      "typeVersion": 1,
+      "position": [
+        120,
+        40
+      ],
+      "parameters": {
+        "operation": "splitItems",
+        "items": "={{$json[\"hosts\"]}}",
+        "options": {
+          "fieldName": "host"
+        }
+      }
+    },
+    {
+      "id": "CheckHost",
+      "name": "Check Ping & SSH",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        360,
+        40
+      ],
+      "parameters": {
+        "command": "bash -lc \"HOST={{$json.host}}; PING=$(ping -c1 -W2 $HOST >/dev/null 2>&1 && echo alive || echo down); SSH=$(nc -z -w3 $HOST 22 >/dev/null 2>&1 && echo open || echo closed); NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ); echo '{\\\"date\\\":\\\"'\"$NOW\"'\\\",\\\"host\\\":\\\"'\"$HOST\"'\\\",\\\"ping\\\":\\\"'\"$PING\"'\\\",\\\"ssh\\\":\\\"'\"$SSH\"'\\\"}'\""
+      }
+    },
+    {
+      "id": "ParseJSON",
+      "name": "Parse JSON",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        600,
+        40
+      ],
+      "parameters": {
+        "functionCode": "const out = [];\nfor (const item of items) {\n  const raw = item.json.data || item.json;\n  const str = typeof raw === 'string' ? raw : JSON.stringify(raw);\n  try { out.push({ json: JSON.parse(str) }); }\n  catch (e) { out.push({ json: { error: 'parse_failed', raw: str } }); }\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "AddStatus",
+      "name": "Derive Status",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 2,
+      "position": [
+        820,
+        40
+      ],
+      "parameters": {
+        "functionCode": "return items.map(i => { const j = i.json; const ok = j.ping === 'alive' && j.ssh === 'open'; return { json: { Date: j.date, Host: j.host, Ping: j.ping, SSH: j.ssh, Status: ok ? 'OK' : 'Attention' } }; });"
+      }
+    },
+    {
+      "id": "AppendToSheet",
+      "name": "Google Sheets: Append",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1060,
+        40
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "__REPLACE_WITH_YOUR_CREDENTIAL_ID__"
+        }
+      },
+      "parameters": {
+        "operation": "append",
+        "documentId": "YOUR_SHEET_ID_HERE",
+        "sheetName": "Audit",
+        "options": {
+          "valueInputMode": "RAW",
+          "keyRow": 1
+        },
+        "columns": [
+          "Date",
+          "Host",
+          "Ping",
+          "SSH",
+          "Status"
+        ]
+      }
+    }
+  ],
+  "connections": {
+    "Schedule (Daily)": {
+      "main": [
+        [
+          {
+            "node": "Set Hosts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Hosts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Hosts": {
+      "main": [
+        [
+          {
+            "node": "Split Hosts to Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Hosts to Items": {
+      "main": [
+        [
+          {
+            "node": "Check Ping & SSH",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Ping & SSH": {
+      "main": [
+        [
+          {
+            "node": "Parse JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse JSON": {
+      "main": [
+        [
+          {
+            "node": "Derive Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Derive Status": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets: Append",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
