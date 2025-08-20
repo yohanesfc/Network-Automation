@@ -1,153 +1,227 @@
 {
-  "name": "Network Audit → Ping & SSH → Google Sheets",
+  "name": "Network Audit Automation",
   "nodes": [
     {
-      "id": "ScheduleTrigger",
-      "name": "Schedule (Daily)",
-      "type": "n8n-nodes-base.cron",
-      "typeVersion": 1,
-      "position": [
-        -320,
-        -40
-      ],
       "parameters": {
         "triggerTimes": {
           "item": [
             {
-              "mode": "everyDay",
-              "hour": 0,
-              "minute": 0
+              "hour": 0
             }
           ]
         }
-      }
+      },
+      "id": "7044e42b-49c3-4f12-9c88-854ee943162e",
+      "name": "Schedule (Daily)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        -880,
+        48
+      ]
     },
     {
-      "id": "ManualTrigger",
+      "parameters": {},
+      "id": "cf5a7a34-0637-4e2e-a5f1-3faa43d38fac",
       "name": "Manual Trigger",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
       "position": [
-        -320,
-        120
-      ],
-      "parameters": {}
+        -880,
+        208
+      ]
     },
     {
-      "id": "SetHosts",
-      "name": "Set Hosts",
-      "type": "n8n-nodes-base.set",
+      "parameters": {
+        "jsCode": "// Pastikan format yang konsisten\nreturn [\n  { json: { host: \"127.0.0.1\", label: \"host1\" } },\n  { json: { host: \"192.168.1.1\", label: \"host2\" } }, \n  { json: { host: \"8.8.8.8\", label: \"host3\" } }\n];"
+      },
+      "id": "8d512367-a1b7-4b01-a211-5fa6c49d00fb",
+      "name": "Hosts (host1/host2/host3)",
+      "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -100,
-        40
-      ],
-      "parameters": {
-        "keepOnlySet": true,
-        "values": {
-          "array": [
-            {
-              "name": "hosts",
-              "value": "['127.0.0.1','192.168.1.1','8.8.8.8']"
-            }
-          ]
-        }
-      }
+        -528,
+        128
+      ]
     },
     {
-      "id": "SplitHosts",
-      "name": "Split Hosts to Items",
-      "type": "n8n-nodes-base.itemLists",
-      "typeVersion": 1,
-      "position": [
-        120,
-        40
-      ],
       "parameters": {
-        "operation": "splitItems",
-        "items": "={{$json[\"hosts\"]}}",
-        "options": {
-          "fieldName": "host"
-        }
-      }
-    },
-    {
-      "id": "CheckHost",
+        "executeOnce": "={{ false }}",
+        "command": "=HOST={{ $json.host }}\nLABEL={{ $json.label }}\n\n# --- PING (dapatkan status + latency ms) ---\nPING_OUT=$(ping -c1 -W2 \"$HOST\" 2>/dev/null)\nif [ $? -eq 0 ]; then\n  PING=\"alive\"\n  # Ambil angka setelah 'time=' lalu ambil token pertama (mis: 12.3 ms → 12.3)\n  PING_MS=$(printf \"%s\\n\" \"$PING_OUT\" | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')\nelse\n  PING=\"down\"\n  PING_MS=\"\"\nfi\n\n# --- TCP 22 (status + connect time ms via Python) ---\nSSH_LINE=$(python3 - \"$HOST\" <<'PY'\nimport socket, sys, time\nhost = sys.argv[1]\nport = 22\ns = socket.socket()\ns.settimeout(3)\nt0 = time.time()\nok = True\ntry:\n    s.connect((host, port))\nexcept Exception:\n    ok = False\nt1 = time.time()\ns.close()\nms = int(round((t1 - t0) * 1000))\nprint(f\"{'open' if ok else 'closed'} {ms if ok else ''}\")\nPY\n)\nSSH_STATUS=$(printf \"%s\\n\" \"$SSH_LINE\" | awk '{print $1}')\nTCP_MS=$(printf \"%s\\n\" \"$SSH_LINE\" | awk '{print $2}')\n\nNOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)\n\n# Output satu baris JSON\nprintf '{\"date\":\"%s\",\"label\":\"%s\",\"host\":\"%s\",\"ping\":\"%s\",\"ping_ms\":\"%s\",\"ssh\":\"%s\",\"tcp_ms\":\"%s\"}\\n' \\\n  \"$NOW\" \"$LABEL\" \"$HOST\" \"$PING\" \"$PING_MS\" \"$SSH_STATUS\" \"$TCP_MS\"\n"
+      },
+      "id": "f38f187c-9bf4-4dec-b8de-7115e3053cba",
       "name": "Check Ping & SSH",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
       "position": [
-        360,
-        40
-      ],
-      "parameters": {
-        "command": "bash -lc \"HOST={{$json.host}}; PING=$(ping -c1 -W2 $HOST >/dev/null 2>&1 && echo alive || echo down); SSH=$(nc -z -w3 $HOST 22 >/dev/null 2>&1 && echo open || echo closed); NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ); echo '{\\\"date\\\":\\\"'\"$NOW\"'\\\",\\\"host\\\":\\\"'\"$HOST\"'\\\",\\\"ping\\\":\\\"'\"$PING\"'\\\",\\\"ssh\\\":\\\"'\"$SSH\"'\\\"}'\""
-      }
+        -240,
+        128
+      ]
     },
     {
-      "id": "ParseJSON",
+      "parameters": {
+        "jsCode": "const results = [];\n\nfor (const item of items) {\n  let rawData = item.json.stdout || '';\n  \n  // Ambil hanya line yang dimulai dengan '{'\n  const jsonLine = rawData.split('\\n').find(line => line.trim().startsWith('{'));\n  \n  if (jsonLine) {\n    try {\n      results.push({ json: JSON.parse(jsonLine.trim()) });\n    } catch (e) {\n      results.push({ json: { error: 'parse_failed' } });\n    }\n  }\n}\n\nreturn results;"
+      },
+      "id": "6c92b477-3f1e-4f92-bd84-3adc4b5a465c",
       "name": "Parse JSON",
-      "type": "n8n-nodes-base.function",
+      "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        600,
-        40
-      ],
-      "parameters": {
-        "functionCode": "const out = [];\nfor (const item of items) {\n  const raw = item.json.data || item.json;\n  const str = typeof raw === 'string' ? raw : JSON.stringify(raw);\n  try { out.push({ json: JSON.parse(str) }); }\n  catch (e) { out.push({ json: { error: 'parse_failed', raw: str } }); }\n}\nreturn out;"
-      }
+        -16,
+        128
+      ]
     },
     {
-      "id": "AddStatus",
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const data = item.json;\n  \n  // Debug logging\n  console.log('Processing:', JSON.stringify(data));\n  \n  // Pastikan semua field ada\n  const date = data.date || new Date().toISOString();\n  const label = data.label || 'unknown';\n  const host = data.host || 'unknown';\n  const ping = data.ping || 'unknown';\n  const ping_ms = data.ping_ms || 'unknown';\n  const ssh = data.ssh || 'unknown';\n  const tcp_ms = data.tcp_ms || 'unknown';\n  // Determine overall status\n  const status = (ping === 'alive' && ssh === 'open') ? 'OK' : 'Attention';\n  \n  return {\n    json: {\n      Date: date,\n      Label: label,\n      Host: host,\n      Ping: ping,\n      Ping_MS : ping_ms,\n      SSH: ssh,\n      TCP_MS: tcp_ms,\n      Status: status\n    }\n  };\n});"
+      },
+      "id": "56a8161f-4711-4ebe-93f8-b98fada9b28d",
       "name": "Derive Status",
-      "type": "n8n-nodes-base.function",
+      "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        820,
-        40
-      ],
-      "parameters": {
-        "functionCode": "return items.map(i => { const j = i.json; const ok = j.ping === 'alive' && j.ssh === 'open'; return { json: { Date: j.date, Host: j.host, Ping: j.ping, SSH: j.ssh, Status: ok ? 'OK' : 'Attention' } }; });"
-      }
+        208,
+        128
+      ]
     },
     {
-      "id": "AppendToSheet",
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1Pe2__93WtgLhVKJuwaqUbrC3vdhdVbilJYYK2sOzAxI",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Pe2__93WtgLhVKJuwaqUbrC3vdhdVbilJYYK2sOzAxI/edit#gid=0"
+        },
+        "columns": {
+          "0": "Date",
+          "1": "Label",
+          "2": "Host",
+          "3": "Ping",
+          "4": "SSH",
+          "5": "Status",
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $json.Date }}",
+            "Label": "={{ $json.Label }}",
+            "Host": "={{ $json.Host }}",
+            "Ping": "={{ $json.Ping }}",
+            "SSH": "={{ $json.SSH }}",
+            "Status": "={{ $json.Status }}",
+            "ping_ms": "={{ $json.Ping_MS }}",
+            "tcp_ms": "={{ $json.TCP_MS }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Date",
+              "displayName": "Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Label",
+              "displayName": "Label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Host",
+              "displayName": "Host",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Ping",
+              "displayName": "Ping",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ping_ms",
+              "displayName": "ping_ms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "SSH",
+              "displayName": "SSH",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tcp_ms",
+              "displayName": "tcp_ms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "412d72a8-5683-481e-90fc-0e6b4b4f0c59",
       "name": "Google Sheets: Append",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4,
       "position": [
-        1060,
-        40
+        448,
+        128
       ],
       "credentials": {
-        "googleApi": {
-          "id": "__REPLACE_WITH_YOUR_CREDENTIAL_ID__"
+        "googleSheetsOAuth2Api": {
+          "id": "3P3vtH38zdglVqhh",
+          "name": "Google Sheets account"
         }
-      },
-      "parameters": {
-        "operation": "append",
-        "documentId": "YOUR_SHEET_ID_HERE",
-        "sheetName": "Audit",
-        "options": {
-          "valueInputMode": "RAW",
-          "keyRow": 1
-        },
-        "columns": [
-          "Date",
-          "Host",
-          "Ping",
-          "SSH",
-          "Status"
-        ]
       }
     }
   ],
+  "pinData": {},
   "connections": {
     "Schedule (Daily)": {
       "main": [
         [
           {
-            "node": "Set Hosts",
+            "node": "Hosts (host1/host2/host3)",
             "type": "main",
             "index": 0
           }
@@ -158,25 +232,14 @@
       "main": [
         [
           {
-            "node": "Set Hosts",
+            "node": "Hosts (host1/host2/host3)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Set Hosts": {
-      "main": [
-        [
-          {
-            "node": "Split Hosts to Items",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Split Hosts to Items": {
+    "Hosts (host1/host2/host3)": {
       "main": [
         [
           {
@@ -221,7 +284,15 @@
       ]
     }
   },
+  "active": false,
   "settings": {
     "executionOrder": "v1"
-  }
+  },
+  "versionId": "d455008d-5833-4377-b9b2-c4b6e904d54c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5ae0f463582cd8aba35e697c6839d2591e148d2c5dd0794a4d29deb9e6613b9a"
+  },
+  "id": "Vts9ir1MtAT7ZXeY",
+  "tags": []
 }
