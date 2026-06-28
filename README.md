@@ -39,4 +39,4 @@ python3 scripts/firewall_audit.py
 ```
 
 ## 📄 License
-MIT
+AGPL v3.0
